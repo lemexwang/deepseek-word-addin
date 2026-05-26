@@ -34,6 +34,8 @@ import {
 const ModelCreators: Record<string, (opts: any) => BaseChatModel> = {
   deepseek: (opts: DeepseekOptions) => {
     const modelName = opts.model || 'deepseek-chat'
+    // Enforce a minimum of 8192 — tool-call JSON for writeDocument can easily exceed 4096 tokens
+    const maxTokens = Math.max(opts.maxTokens ?? 8192, 8192)
     return new ChatOpenAI({
       modelName,
       configuration: {
@@ -41,7 +43,7 @@ const ModelCreators: Record<string, (opts: any) => BaseChatModel> = {
         baseURL: 'https://api.deepseek.com/v1',
       },
       temperature: opts.temperature ?? 0.7,
-      maxTokens: opts.maxTokens ?? 4096,
+      maxTokens,
     })
   },
 
