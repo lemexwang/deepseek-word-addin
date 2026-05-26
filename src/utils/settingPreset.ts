@@ -142,7 +142,7 @@ export const settingPreset = {
   deepseekCustomModel: inputSetting('', 'deepseekCustomModel'),
   deepseekCustomModels: customModelsetting('deepseekCustomModels', 'deepseekCustomModel'),
   deepseekTemperature: inputNumSetting(0.7, 'deepseekTemperature', 'temperature'),
-  deepseekMaxTokens: inputNumSetting(4096, 'deepseekMaxTokens', 'maxTokens'),
+  deepseekMaxTokens: inputNumSetting(8192, 'deepseekMaxTokens', 'maxTokens'),
   api: {
     ...inputSetting('ollama'),
     type: 'select',

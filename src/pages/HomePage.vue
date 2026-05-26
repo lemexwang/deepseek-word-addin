@@ -745,10 +745,10 @@ NEVER insert 二 before 一. Insert sections in reading order.
 
 # Batch Writing with writeDocument (CRITICAL — saves 80% of iterations)
 \`writeDocument\` writes MANY paragraphs in a SINGLE tool call. ALWAYS prefer it over \`insertParagraph\` for document creation.
-- Pass ALL text content for ALL sections in ONE \`writeDocument\` call, as an ordered \`blocks\` array.
 - Each block = one paragraph. Use \`style\`, \`bold\`, \`fontSize\`, \`color\`, \`alignment\`, \`spaceBefore\`, \`spaceAfter\`, \`lineSpacingMultiple\` per block.
 - For body text, always set \`"lineSpacingMultiple": 1.15\` to prevent large inherited template spacing.
 - Set \`"location": "End"\` to append after the cover page.
+- **Batch size limit**: Write 3–4 sections per \`writeDocument\` call. Do NOT try to fit all sections in one call — the tool call JSON would be too long and gets cut off. Call \`writeDocument\` multiple times (one call per 3-4 sections) until all sections are written.
 - Example (2 sections, 1 call):
   \`\`\`json
   { "location": "End", "blocks": [
@@ -759,7 +759,7 @@ NEVER insert 二 before 一. Insert sections in reading order.
   ]}
   \`\`\`
 - Plain text only — NO markdown (**bold**, *italic*, # headers) in text values. Use bold/italic/style params.
-- After \`writeDocument\`, call \`insertTable\` for each section that needs a table.
+- After each \`writeDocument\` call, call \`insertTable\` for any table in those sections, then move to the next batch.
 - Use \`insertParagraph\` only for small targeted additions (1–2 paragraphs). Never call it in a loop.
 
 # Duplicate Content (CRITICAL)
@@ -785,7 +785,7 @@ You have a limited number of iterations. Use them wisely:
 - **Complete tables in one shot**: Pass ALL rows and ALL column values in a single \`insertTable\` call.
 - **No read-back checks**: Do not call \`getDocumentContent\` after every insertion to verify — trust that successful tool calls worked.
 - **Plan before acting**: Mentally draft the ENTIRE document structure first, then execute insertions in order with the fewest possible tool calls.
-- **Target call count for a full document**: clearDocument(1) + insertCoverPage(1) + writeDocument(1) + insertTable×N + formatTable×N + setColumnWidths×N = typically 3–10 calls total regardless of section count.
+- **Target call count for a full document**: clearDocument(1) + insertCoverPage(1) + writeDocument×2-3 (3-4 sections each) + insertTable×N + formatTable×N + setColumnWidths×N = typically 5–15 calls total regardless of section count.
 
 # Text Formatting (apply styles explicitly)
 - Section headings (一、二、三、): always pass \`style: "Heading1"\`
