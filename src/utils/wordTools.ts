@@ -492,11 +492,7 @@ const wordToolDefinitions: Record<WordToolName, WordToolDefinition> = {
         const segments = normalised.split('\n')
 
         const applyFormat = (para: Word.Paragraph) => {
-          if (style) {
-            try { para.styleBuiltIn = style as any } catch { para.style = style }
-            // Heading styles in some templates inherit list bullets — strip them
-            if (style.startsWith('Heading')) { try { para.detachFromList() } catch { /* not in a list */ } }
-          }
+          if (style) { try { para.styleBuiltIn = style as any } catch { para.style = style } }
           if (alignment) para.alignment = (alignment === 'center' ? 'centered' : alignment) as any
           if (fontSize !== undefined) para.font.size = fontSize
           if (bold !== undefined) para.font.bold = bold
@@ -2083,11 +2079,7 @@ const wordToolDefinitions: Record<WordToolName, WordToolDefinition> = {
           const orderedBlocks: any[] = location === 'Start' ? [...blocks].reverse() : blocks
 
           const applyBlock = (para: Word.Paragraph, block: any) => {
-            if (block.style) {
-              try { para.styleBuiltIn = block.style as any } catch { para.style = block.style }
-              // Heading styles in some templates inherit list bullets — strip them
-              if (String(block.style).startsWith('Heading')) { try { para.detachFromList() } catch { /* not in a list */ } }
-            }
+            if (block.style) { try { para.styleBuiltIn = block.style as any } catch { para.style = block.style } }
             if (block.alignment) para.alignment = (block.alignment === 'center' ? 'centered' : block.alignment) as any
             if (block.fontSize !== undefined) para.font.size = block.fontSize
             if (block.bold !== undefined) para.font.bold = block.bold
