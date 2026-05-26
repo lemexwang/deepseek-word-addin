@@ -86,6 +86,7 @@ export const Setting_Names = [
   'systemPrompt',
   'userPrompt',
   'agentMaxIterations',
+  'serperAPIKey',
 ] as const
 
 export type SettingNames = (typeof Setting_Names)[number]
@@ -194,4 +195,5 @@ export const settingPreset = {
   systemPrompt: inputSetting('', 'defaultSystemPrompt'),
   userPrompt: inputSetting('', 'defaultPrompt'),
   agentMaxIterations: inputNumSetting(150, 'agentMaxIterations', 'maxTokens'),
+  serperAPIKey: inputSetting('', 'serperAPIKey'),
 } as const satisfies Record<SettingNames, ISettingOption<any>>

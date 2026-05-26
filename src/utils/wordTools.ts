@@ -50,6 +50,7 @@ export type WordToolName =
   | 'clearDocument'
   | 'insertCoverPage'
   | 'insertEquation'
+  | 'writeDocument'
 
 // Word operation mutex — ensures parallel tool calls from LangGraph's ToolNode
 // execute sequentially. Without this, concurrent insertParagraph('End') calls
@@ -325,6 +326,7 @@ const wordToolDefinitions: Record<WordToolName, WordToolDefinition> = {
       properties: {},
       required: [],
     },
+    readonly: true,
     execute: async () => {
       return Word.run(async context => {
         const range = context.document.getSelection()
@@ -343,6 +345,7 @@ const wordToolDefinitions: Record<WordToolName, WordToolDefinition> = {
       properties: {},
       required: [],
     },
+    readonly: true,
     execute: async () => {
       return Word.run(async context => {
         const body = context.document.body
@@ -432,67 +435,90 @@ const wordToolDefinitions: Record<WordToolName, WordToolDefinition> = {
 
   insertParagraph: {
     name: 'insertParagraph',
-    description: 'Insert a new paragraph at the specified location. Specify fontSize and fontFamily for proper Chinese document formatting.',
+    description:
+      'Insert a new paragraph. For multi-paragraph documents use writeDocument instead (faster). ' +
+      'Supports alignment, color, spacing, and font options. ' +
+      'IMPORTANT: text must be plain text only — no markdown (no **bold**, no *italic*, no # headers). ' +
+      'Use bold/italic/style params instead.',
     inputSchema: {
       type: 'object',
       properties: {
         text: {
           type: 'string',
-          description: 'The paragraph text. To write multiple paragraphs in one call, separate them with a real newline character (\\n). Each \\n creates a new paragraph with the same style.',
+          description: 'Plain text only — NO markdown syntax. Separate with \\n to insert multiple paragraphs sharing the same style.',
         },
         location: {
           type: 'string',
-          description:
-            'Where to insert: "After" (after cursor/selection), "Before" (before cursor), "Start" (start of doc), or "End" (end of doc). Default is "End".',
+          description: 'Where to insert: "After", "Before", "Start", or "End" (default).',
           enum: ['After', 'Before', 'Start', 'End'],
         },
         style: {
           type: 'string',
-          description:
-            'Word built-in style. Use Heading1 for 一/二/三 sections, Heading2 for sub-sections, Normal for body text.',
+          description: 'Word style: Title, Subtitle, Heading1-4, Normal, Quote, IntenseQuote.',
           enum: ['Normal', 'Heading1', 'Heading2', 'Heading3', 'Heading4', 'Quote', 'IntenseQuote', 'Title', 'Subtitle'],
+        },
+        alignment: {
+          type: 'string',
+          description: 'Text alignment: left (default), center, right, justified.',
+          enum: ['left', 'center', 'right', 'justified'],
         },
         fontSize: {
           type: 'number',
-          description:
-            'Font size in points. Recommended: body text = 12, section heading = 16, sub-heading = 14. Omit to use the style default.',
+          description: 'Font size in points. Recommended: body=12, sub-heading=14, heading=16.',
         },
-        bold: {
-          type: 'boolean',
-          description: 'Whether the paragraph text should be bold.',
-        },
+        bold: { type: 'boolean' },
+        italic: { type: 'boolean' },
         fontFamily: {
           type: 'string',
-          description: 'Font family. For Chinese documents: "SimSun" (宋体), "SimHei" (黑体), "Microsoft YaHei" (微软雅黑). Omit to use style default.',
+          description: 'Font family. Chinese: SimSun (宋体), SimHei (黑体), Microsoft YaHei (微软雅黑).',
+        },
+        color: {
+          type: 'string',
+          description: 'Font color as hex without #, e.g. "404040" for dark grey, "2E74B5" for blue.',
+        },
+        spaceBefore: { type: 'number', description: 'Space before paragraph in points (e.g. 12).' },
+        spaceAfter: { type: 'number', description: 'Space after paragraph in points (e.g. 6).' },
+        lineSpacingMultiple: {
+          type: 'number',
+          description: 'Line spacing multiplier: 1.0=single, 1.15=Word default, 1.5=1.5×, 2.0=double. Set 1.0 for compact reports to override large template spacing.',
         },
       },
       required: ['text'],
     },
     execute: async args => {
-      const { text, location = 'End', style, fontSize, bold, fontFamily } = args
+      const { text, location = 'End', style, alignment, fontSize, bold, italic, fontFamily, color, spaceBefore, spaceAfter, lineSpacingMultiple } = args
       return Word.run(async context => {
-        // Normalise: convert literal \n sequences (backslash+n from agent JSON) to real newlines,
-        // then split so each line becomes a separate Word paragraph.
         const normalised = text.replace(/\\n/g, '\n')
         const segments = normalised.split('\n')
 
         const applyFormat = (para: Word.Paragraph) => {
-          if (style) { try { para.styleBuiltIn = style as any } catch { para.style = style } }
+          if (style) {
+            try { para.styleBuiltIn = style as any } catch { para.style = style }
+            // Heading styles in some templates inherit list bullets — strip them
+            if (style.startsWith('Heading')) { try { para.detachFromList() } catch { /* not in a list */ } }
+          }
+          if (alignment) para.alignment = (alignment === 'center' ? 'centered' : alignment) as any
           if (fontSize !== undefined) para.font.size = fontSize
           if (bold !== undefined) para.font.bold = bold
+          if (italic !== undefined) para.font.italic = italic
           if (fontFamily) para.font.name = fontFamily
+          if (color) para.font.color = color.replace(/^#/, '')
+          if (spaceBefore !== undefined) para.spaceBefore = spaceBefore
+          if (spaceAfter !== undefined) para.spaceAfter = spaceAfter
+          if (lineSpacingMultiple !== undefined) {
+            para.lineSpacingRule = Word.LineSpacingRule.multiple as any
+            para.lineSpacing = lineSpacingMultiple * 12
+          }
         }
 
         if (location === 'Start' || location === 'End') {
-          // For Start, insert in reverse order so reading order is preserved top-to-bottom
           const ordered = location === 'Start' ? [...segments].reverse() : segments
           for (const seg of ordered) {
             applyFormat(context.document.body.insertParagraph(seg, location as any))
           }
         } else {
-          // Before/After: cursor-relative; multi-line not supported, use joined text
           const range = context.document.getSelection()
-          applyFormat(range.insertParagraph(normalised, location as any))
+          applyFormat(range.insertParagraph(segments.join(' '), location as any))
         }
 
         await context.sync()
@@ -602,6 +628,7 @@ const wordToolDefinitions: Record<WordToolName, WordToolDefinition> = {
       properties: {},
       required: [],
     },
+    readonly: true,
     execute: async () => {
       return Word.run(async context => {
         const body = context.document.body
@@ -958,17 +985,15 @@ const wordToolDefinitions: Record<WordToolName, WordToolDefinition> = {
     },
     execute: async args => {
       const { direction = 'After' } = args
+      void direction // param kept for API compatibility but unused (Word API has no single-char delete)
       return Word.run(async context => {
         const range = context.document.getSelection()
         range.load('text')
         await context.sync()
-        if (range.text.length > 0) {
-          range.delete()
-        } else {
-          // No selection: expand in the given direction and delete
-          const expanded = range.expandTo(range)
-          expanded.delete()
+        if (range.text.length === 0) {
+          return 'No text selected to delete.'
         }
+        range.delete()
         await context.sync()
         return 'Text deleted.'
       })
@@ -1053,6 +1078,7 @@ const wordToolDefinitions: Record<WordToolName, WordToolDefinition> = {
       properties: {},
       required: [],
     },
+    readonly: true,
     execute: async () => {
       return Word.run(async context => {
         const range = context.document.getSelection()
@@ -1177,35 +1203,26 @@ const wordToolDefinitions: Record<WordToolName, WordToolDefinition> = {
       properties: {},
       required: [],
     },
+    readonly: true,
     execute: async () => {
       return Word.run(async context => {
         const tables = context.document.body.tables
         tables.load(['items'])
         await context.sync()
 
-        const tableInfos = []
-        for (let i = 0; i < tables.items.length; i++) {
-          const table = tables.items[i]
+        // Batch-load all table properties in one sync instead of N syncs
+        for (const table of tables.items) {
           table.load(['rowCount', 'values'])
-          await context.sync()
-
-          const columnCount = table.values && table.values[0] ? table.values[0].length : 0
-
-          tableInfos.push({
-            index: i,
-            rowCount: table.rowCount,
-            columnCount,
-          })
         }
+        await context.sync()
 
-        return JSON.stringify(
-          {
-            tableCount: tables.items.length,
-            tables: tableInfos,
-          },
-          null,
-          2,
-        )
+        const tableInfos = tables.items.map((table, i) => ({
+          index: i,
+          rowCount: table.rowCount,
+          columnCount: table.values?.[0]?.length ?? 0,
+        }))
+
+        return JSON.stringify({ tableCount: tables.items.length, tables: tableInfos }, null, 2)
       })
     },
   },
@@ -1316,6 +1333,7 @@ const wordToolDefinitions: Record<WordToolName, WordToolDefinition> = {
       },
       required: ['searchText'],
     },
+    readonly: true,
     execute: async args => {
       const { searchText, matchCase = false, matchWholeWord = false } = args
       return Word.run(async context => {
@@ -1363,29 +1381,26 @@ const wordToolDefinitions: Record<WordToolName, WordToolDefinition> = {
       properties: {},
       required: [],
     },
+    readonly: true,
     execute: async () => {
       return Word.run(async context => {
         const comments = context.document.body.getComments()
         comments.load('items')
         await context.sync()
 
-        const commentList = []
-        for (let i = 0; i < comments.items.length; i++) {
-          const c = comments.items[i]
-          c.load(['authorName', 'content', 'contentRange', 'replies'])
-          await context.sync()
-
-          const replies = c.replies
-          replies.load('items')
-          await context.sync()
-
-          commentList.push({
-            index: i,
-            author: c.authorName,
-            content: c.content,
-            replyCount: replies.items.length,
-          })
+        // Batch-load all comment properties in one sync (was 2 syncs per comment)
+        for (const c of comments.items) {
+          c.load(['authorName', 'content'])
+          c.replies.load('items')
         }
+        await context.sync()
+
+        const commentList = comments.items.map((c, i) => ({
+          index: i,
+          author: c.authorName,
+          content: c.content,
+          replyCount: c.replies.items.length,
+        }))
 
         return JSON.stringify({ commentCount: comments.items.length, comments: commentList }, null, 2)
       })
@@ -1526,26 +1541,25 @@ const wordToolDefinitions: Record<WordToolName, WordToolDefinition> = {
       properties: {},
       required: [],
     },
+    readonly: true,
     execute: async () => {
       return Word.run(async context => {
         const sections = context.document.sections
         sections.load('items')
         await context.sync()
 
-        const result = []
-        for (let i = 0; i < sections.items.length; i++) {
-          const section = sections.items[i]
-          const header = section.getHeader('Primary')
-          const footer = section.getFooter('Primary')
-          header.load('text')
-          footer.load('text')
-          await context.sync()
-          result.push({
-            section: i,
-            header: header.text || '(empty)',
-            footer: footer.text || '(empty)',
-          })
-        }
+        // Batch-load all headers and footers in one sync (was 1 sync per section)
+        const headers = sections.items.map(s => s.getHeader('Primary'))
+        const footers = sections.items.map(s => s.getFooter('Primary'))
+        for (const h of headers) h.load('text')
+        for (const f of footers) f.load('text')
+        await context.sync()
+
+        const result = sections.items.map((_, i) => ({
+          section: i,
+          header: headers[i].text || '(empty)',
+          footer: footers[i].text || '(empty)',
+        }))
         return JSON.stringify(result, null, 2)
       })
     },
@@ -1578,29 +1592,106 @@ const wordToolDefinitions: Record<WordToolName, WordToolDefinition> = {
 
   insertTableOfContents: {
     name: 'insertTableOfContents',
-    description: 'Insert an automatic Table of Contents at the current cursor position. Uses heading styles to build the TOC.',
+    description:
+      'Insert a Table of Contents. ' +
+      'PREFERRED: pass a "chapters" array with your planned chapter titles — this inserts the TOC immediately without scanning the document (fast, works before chapters are written). ' +
+      'Alternatively call without chapters AFTER writing all Heading-styled content to auto-scan headings.',
     inputSchema: {
       type: 'object',
       properties: {
         title: {
           type: 'string',
-          description: 'Optional TOC title (default: "Table of Contents")',
+          description: 'TOC heading text. Default: "目 录" for Chinese, "Table of Contents" for English.',
+        },
+        chapters: {
+          type: 'array',
+          description:
+            'Pre-defined chapter list. Use this to build the TOC before writing the chapters. ' +
+            'Example: [{"title":"一、公司概况","level":1},{"title":"1.1 基本信息","level":2}]',
+          items: {
+            type: 'object',
+            properties: {
+              title: { type: 'string', description: 'Chapter or section title' },
+              level: { type: 'number', description: '1 = top-level chapter, 2 = section, 3 = sub-section', enum: [1, 2, 3] },
+            },
+            required: ['title'],
+          },
+        },
+        location: {
+          type: 'string',
+          enum: ['End', 'Start'],
+          description: '"End" (default) appends, "Start" prepends to document top.',
         },
       },
       required: [],
     },
     execute: async args => {
-      const { title = 'Table of Contents' } = args
-      return Word.run(async context => {
-        const body = context.document.body
-        const titlePara = body.insertParagraph(title, 'End')
-        try { titlePara.styleBuiltIn = 'TOCHeading' as any } catch { titlePara.style = 'TOC Heading' }
-        // TOC placeholder note — actual TOC requires Word field codes not available in Office.js
-        const notePara = body.insertParagraph('[Table of Contents will be generated from Heading styles]', 'End')
-        notePara.style = 'Normal'
-        await context.sync()
-        return `TOC placeholder inserted with title "${title}". Update the TOC using Word's References → Update Table after adding content.`
-      })
+      const { title = '目 录', location = 'End', chapters } = args
+      return withWordLock(() =>
+        Word.run(async context => {
+          type HeadingEntry = { level: number; text: string }
+          let headings: HeadingEntry[] = []
+
+          if (chapters && chapters.length > 0) {
+            // Use provided chapter list directly — no document scan needed
+            headings = (chapters as any[]).map(c => ({ level: Number(c.level) || 1, text: String(c.title || '') }))
+          } else {
+            // Scan existing document headings — single sync for efficiency
+            const paragraphs = context.document.body.paragraphs
+            paragraphs.load('text,style')
+            await context.sync()
+            for (const p of paragraphs.items) {
+              const s = (p.style || '').toLowerCase().replace(/\s+/g, '')
+              const t = p.text.trim()
+              if (!t) continue
+              if (s === 'heading1' || s === '标题1') headings.push({ level: 1, text: t })
+              else if (s === 'heading2' || s === '标题2') headings.push({ level: 2, text: t })
+              else if (s === 'heading3' || s === '标题3') headings.push({ level: 3, text: t })
+            }
+          }
+
+          const body = context.document.body
+          const insertAt = location as 'Start' | 'End'
+
+          const applyEntry = (para: Word.Paragraph, level: number) => {
+            para.style = 'Normal'
+            para.font.size = level === 1 ? 12 : 11
+            para.font.bold = level === 1
+            para.lineSpacing = 12
+            para.lineSpacingRule = Word.LineSpacingRule.multiple as any
+            if (level === 2) para.leftIndent = 480
+            if (level === 3) para.leftIndent = 960
+            para.spaceBefore = level === 1 ? 8 : 3
+            para.spaceAfter = level === 1 ? 4 : 2
+          }
+
+          if (location === 'Start') {
+            // Insert in reverse so reading order is top-to-bottom
+            for (const h of [...headings].reverse()) {
+              applyEntry(body.insertParagraph(h.text, 'Start'), h.level)
+            }
+            const tp = body.insertParagraph(title, 'Start')
+            try { tp.styleBuiltIn = 'Heading1' as any } catch { tp.style = 'Heading 1' }
+            tp.alignment = 'centered' as any
+            tp.spaceAfter = 16
+          } else {
+            const tp = body.insertParagraph(title, 'End')
+            try { tp.styleBuiltIn = 'Heading1' as any } catch { tp.style = 'Heading 1' }
+            tp.alignment = 'centered' as any
+            tp.spaceAfter = 16
+            for (const h of headings) {
+              applyEntry(body.insertParagraph(h.text, 'End'), h.level)
+            }
+          }
+
+          await context.sync()
+
+          if (headings.length === 0) {
+            return `TOC title "${title}" inserted. No chapter entries yet — call insertTableOfContents again with a "chapters" array, or write chapters with Heading1/Heading2 styles then call updateTableOfContents.`
+          }
+          return `TOC inserted with ${headings.length} entries.`
+        }),
+      )
     },
   },
 
@@ -1666,6 +1757,7 @@ const wordToolDefinitions: Record<WordToolName, WordToolDefinition> = {
       properties: {},
       required: [],
     },
+    readonly: true,
     execute: async () => {
       const styles = [
         'Normal',
@@ -1720,25 +1812,25 @@ const wordToolDefinitions: Record<WordToolName, WordToolDefinition> = {
       properties: {},
       required: [],
     },
+    readonly: true,
     execute: async () => {
       return Word.run(async context => {
         const sections = context.document.sections
         sections.load('items')
         await context.sync()
 
-        const sectionList = []
-        for (let i = 0; i < sections.items.length; i++) {
-          const header = sections.items[i].getHeader('Primary')
-          const footer = sections.items[i].getFooter('Primary')
-          header.load('text')
-          footer.load('text')
-          await context.sync()
-          sectionList.push({
-            index: i,
-            hasHeader: !!(header.text && header.text.trim()),
-            hasFooter: !!(footer.text && footer.text.trim()),
-          })
-        }
+        // Batch-load all headers and footers in one sync (was 1 sync per section)
+        const headers = sections.items.map(s => s.getHeader('Primary'))
+        const footers = sections.items.map(s => s.getFooter('Primary'))
+        for (const h of headers) h.load('text')
+        for (const f of footers) f.load('text')
+        await context.sync()
+
+        const sectionList = sections.items.map((_, i) => ({
+          index: i,
+          hasHeader: !!(headers[i].text?.trim()),
+          hasFooter: !!(footers[i].text?.trim()),
+        }))
         return JSON.stringify({ sectionCount: sections.items.length, sections: sectionList }, null, 2)
       })
     },
@@ -1919,6 +2011,114 @@ const wordToolDefinitions: Record<WordToolName, WordToolDefinition> = {
     },
   },
 
+  writeDocument: {
+    name: 'writeDocument',
+    description:
+      'Write multiple paragraphs to the document in a SINGLE operation — 10-20× faster than calling insertParagraph repeatedly. ' +
+      'Use this whenever writing structured content: reports, tables of contents, weather forecasts, financial summaries, etc. ' +
+      'Each block has independent style, alignment, font, color, and spacing. ' +
+      'Use location "Replace" to clear the document and rewrite from scratch. ' +
+      'IMPORTANT: text values must be plain text only — no markdown (no **bold**, no *italic*, no # headers). Use bold/italic/style params instead.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        blocks: {
+          type: 'array',
+          description: 'Ordered list of paragraph blocks to write.',
+          items: {
+            type: 'object',
+            properties: {
+              text: {
+                type: 'string',
+                description: 'Plain text only — NO markdown syntax. Use \\n within text to produce sub-paragraphs sharing the same style.',
+              },
+              style: {
+                type: 'string',
+                description: 'Word style. Use Title for document title, Subtitle for subtitle, Heading1-3 for sections, Normal for body.',
+                enum: ['Normal', 'Heading1', 'Heading2', 'Heading3', 'Heading4', 'Title', 'Subtitle', 'Quote'],
+              },
+              alignment: {
+                type: 'string',
+                description: 'Text alignment: left (default), center, right, justified.',
+                enum: ['left', 'center', 'right', 'justified'],
+              },
+              bold: { type: 'boolean' },
+              italic: { type: 'boolean' },
+              fontSize: { type: 'number', description: 'Font size in points.' },
+              fontFamily: {
+                type: 'string',
+                description: 'Font family. Chinese: SimSun (宋体), SimHei (黑体), Microsoft YaHei (微软雅黑).',
+              },
+              color: {
+                type: 'string',
+                description: 'Font color as hex without #, e.g. "404040" for dark grey, "2E74B5" for blue.',
+              },
+              spaceBefore: { type: 'number', description: 'Space before paragraph in points.' },
+              spaceAfter: { type: 'number', description: 'Space after paragraph in points.' },
+              lineSpacingMultiple: {
+                type: 'number',
+                description: 'Line spacing multiplier: 1.0=single, 1.15=Word default, 1.5=1.5×, 2.0=double. Set 1.0 for compact body text to override large template spacing.',
+              },
+            },
+            required: ['text'],
+          },
+        },
+        location: {
+          type: 'string',
+          enum: ['End', 'Start', 'Replace'],
+          description: '"End": append to document (default). "Start": prepend to top. "Replace": clear document first then write.',
+        },
+      },
+      required: ['blocks'],
+    },
+    execute: async args => {
+      const { blocks, location = 'End' } = args
+      return withWordLock(() =>
+        Word.run(async context => {
+          if (location === 'Replace') {
+            context.document.body.clear()
+          }
+
+          const insertLoc: 'Start' | 'End' = location === 'Start' ? 'Start' : 'End'
+          const orderedBlocks: any[] = location === 'Start' ? [...blocks].reverse() : blocks
+
+          const applyBlock = (para: Word.Paragraph, block: any) => {
+            if (block.style) {
+              try { para.styleBuiltIn = block.style as any } catch { para.style = block.style }
+              // Heading styles in some templates inherit list bullets — strip them
+              if (String(block.style).startsWith('Heading')) { try { para.detachFromList() } catch { /* not in a list */ } }
+            }
+            if (block.alignment) para.alignment = (block.alignment === 'center' ? 'centered' : block.alignment) as any
+            if (block.fontSize !== undefined) para.font.size = block.fontSize
+            if (block.bold !== undefined) para.font.bold = block.bold
+            if (block.italic !== undefined) para.font.italic = block.italic
+            if (block.fontFamily) para.font.name = block.fontFamily
+            if (block.color) para.font.color = String(block.color).replace(/^#/, '')
+            if (block.spaceBefore !== undefined) para.spaceBefore = block.spaceBefore
+            if (block.spaceAfter !== undefined) para.spaceAfter = block.spaceAfter
+            if (block.lineSpacingMultiple !== undefined) {
+              para.lineSpacingRule = Word.LineSpacingRule.multiple as any
+              para.lineSpacing = block.lineSpacingMultiple * 12
+            }
+          }
+
+          for (const block of orderedBlocks) {
+            const normalised = (block.text || '').replace(/\\n/g, '\n')
+            const segments = normalised.split('\n')
+            const orderedSegs = location === 'Start' ? [...segments].reverse() : segments
+            for (const seg of orderedSegs) {
+              const para = context.document.body.insertParagraph(seg, insertLoc)
+              applyBlock(para, block)
+            }
+          }
+
+          await context.sync()
+          return `${blocks.length} block(s) written to document (location: ${location}).`
+        }),
+      )
+    },
+  },
+
   clearDocument: {
     name: 'clearDocument',
     description:
@@ -1981,9 +2181,13 @@ export function createWordTools(enabledTools?: WordToolName[]) {
       return tool(
         async input => {
           try {
-            // withWordLock serialises concurrent calls from LangGraph's parallel ToolNode,
-            // preserving insertion order even when the agent emits multiple tool_calls at once.
-            return await withWordLock(() => def.execute(input))
+            // Read-only tools bypass the mutex — they don't modify document state so
+            // they can run concurrently without risking insertion-order corruption.
+            // Write tools still go through withWordLock to serialise concurrent calls
+            // from LangGraph's parallel ToolNode.
+            return def.readonly
+              ? await def.execute(input)
+              : await withWordLock(() => def.execute(input))
           } catch (error: any) {
             return `Error: ${error.message || 'Unknown error occurred'}`
           }

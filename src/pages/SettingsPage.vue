@@ -292,6 +292,21 @@
             v-show="currentTab === 'tools'"
             class="w-full flex-1 items-center gap-2 overflow-hidden bg-bg-secondary p-1"
           >
+            <!-- Search API Section -->
+            <div class="mb-2 flex w-full flex-col gap-2 rounded-md border border-border-secondary p-2 shadow-sm">
+              <div class="rounded-md border border-border-secondary p-1 shadow-sm">
+                <h3 class="text-center text-sm font-semibold text-accent/70">
+                  {{ t('searchApiLabel') }}
+                </h3>
+              </div>
+              <SettingCard>
+                <CustomInput
+                  v-model="settingForm.serperAPIKey"
+                  :title="t('serperAPIKeyLabel')"
+                  :placeholder="t('serperAPIKeyPlaceholder')"
+                />
+              </SettingCard>
+            </div>
             <!-- Word Tools Section -->
             <div
               class="flex h-full w-full flex-col gap-2 overflow-auto rounded-md border border-border-secondary p-2 shadow-sm"

@@ -157,96 +157,67 @@ async function executeAgentFlow(model: BaseChatModel, options: AgentOptions): Pr
     })
 
     const stream = await agent.stream(
+      { messages: options.messages },
       {
-        messages: options.messages,
-      },
-      {
-        recursionLimit: Number(options.recursionLimit), //最大迭代次数
+        recursionLimit: Number(options.recursionLimit),
         signal: options.abortSignal,
         configurable: {
           thread_id: options.threadId,
           checkpoint_id: options.checkpointId,
         },
-        streamMode: 'values',
+        streamMode: 'messages',
       },
     )
 
-    let fullContent = ''
-    let stepCount = 0
+    const announcedToolIds = new Set<string>()
+    let currentContent = ''
 
-    for await (const step of stream) {
-      if (options.abortSignal?.aborted) {
-        break
-      }
+    for await (const chunk of stream) {
+      if (options.abortSignal?.aborted) break
 
-      stepCount++
-      console.log(`[Agent] Step ${stepCount}:`, {
-        messageCount: step.messages?.length || 0,
-        lastMessageType: step.messages?.[step.messages.length - 1]?.constructor?.name,
-      })
+      const msg = chunk[0] as any
+      if (!msg) continue
+      const msgType = msg._getType?.()
 
-      const messages = step.messages || []
-      const lastMessage = messages[messages.length - 1]
-
-      if (!lastMessage) continue
-
-      // Cast to any for accessing tool-related properties
-      const msg = lastMessage as any
-
-      console.log(`[Agent] Message type: ${msg._getType?.() || 'unknown'}`)
-
-      // Handle AI messages with tool calls
-      if (msg._getType?.() === 'ai' && msg.tool_calls?.length > 0) {
-        console.log('[Agent] Tool calls detected:', msg.tool_calls.length)
-        for (const toolCall of msg.tool_calls) {
-          console.log('[Agent] Tool call:', {
-            name: toolCall.name,
-            args: toolCall.args,
-          })
-          if (options.onToolCall) {
-            options.onToolCall(toolCall.name, toolCall.args)
+      // Detect tool calls from streaming AI chunks (fire once per tool call id)
+      if (msgType === 'ai' && msg.tool_call_chunks?.length > 0) {
+        for (const tc of msg.tool_call_chunks) {
+          if (tc.name && tc.id && !announcedToolIds.has(tc.id)) {
+            announcedToolIds.add(tc.id)
+            currentContent = ''
+            if (options.onToolCall) options.onToolCall(tc.name, {})
           }
         }
+        continue
       }
 
-      // Handle tool result messages
-      if (msg._getType?.() === 'tool') {
-        const toolName = msg.name || 'unknown'
-        const toolContent = String(msg.content || '')
-        console.log('[Agent] Tool result:', {
-          name: toolName,
-          contentLength: toolContent.length,
-          contentPreview: toolContent.substring(0, 100),
-        })
+      // Complete tool result messages
+      if (msgType === 'tool') {
         if (options.onToolResult) {
-          options.onToolResult(toolName, toolContent)
+          options.onToolResult(String(msg.name || ''), String(msg.content || ''))
         }
+        currentContent = ''
+        continue
       }
 
-      // Handle AI message content (the final response)
-      if (msg._getType?.() === 'ai' && msg.content) {
-        const content = typeof msg.content === 'string' ? msg.content : ''
-        if (content && (!msg.tool_calls || msg.tool_calls.length === 0)) {
-          fullContent = content
-          console.log('[Agent] AI response:', {
-            content,
-          })
-          options.onStream(fullContent)
-        }
+      // Stream AI text tokens for the final response
+      if (msgType === 'ai' && typeof msg.content === 'string' && msg.content) {
+        currentContent += msg.content
+        options.onStream(currentContent)
       }
     }
 
-    console.log('[Agent] Flow completed. Total steps:', stepCount)
+    console.log('[Agent] Flow completed')
   } catch (error: any) {
-    console.error('[Agent] Error:', error)
     if (error.name === 'AbortError' || options.abortSignal?.aborted) {
       throw error
     }
     if (error.name === 'GraphRecursionError') {
       options.errorIssue.value = 'recursionLimitExceeded'
+    } else {
+      options.errorIssue.value = true
     }
-    // TODO: more specific error handling based on LangGraph error
-    console.error(error)
+    console.error('[Agent] Error:', error)
   } finally {
     options.loading.value = false
   }

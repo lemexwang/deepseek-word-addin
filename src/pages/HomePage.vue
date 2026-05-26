@@ -621,28 +621,29 @@ async function sendMessage() {
   userInput.value = ''
   adjustTextareaHeight()
 
-  // Get selected text from Word
-  let selectedText = ''
-  if (useSelectedText.value) {
-    selectedText = await Word.run(async ctx => {
-      const range = ctx.document.getSelection()
-      range.load('text')
-      await ctx.sync()
-      return range.text
-    })
-  }
-
-  // Add user message
-  const fullMessage = new HumanMessage(
-    selectedText ? `${userMessage}\n\n[Selected text: "${selectedText}"]` : userMessage,
-  )
-
-  scrollToBottom()
-
   loading.value = true
   abortController.value = new AbortController()
 
   try {
+    let selectedText = ''
+    if (useSelectedText.value) {
+      try {
+        selectedText = await Word.run(async ctx => {
+          const range = ctx.document.getSelection()
+          range.load('text')
+          await ctx.sync()
+          return range.text
+        })
+      } catch (e) {
+        console.warn('Could not get selected text:', e)
+      }
+    }
+
+    const fullMessage = new HumanMessage(
+      selectedText ? `${userMessage}\n\n[Selected text: "${selectedText}"]` : userMessage,
+    )
+
+    scrollToBottom()
     await processChat(fullMessage, undefined)
   } catch (error: any) {
     if (error.name === 'AbortError') {
@@ -737,11 +738,29 @@ You are a highly skilled Microsoft Word Expert Agent. Your goal is to assist use
 When creating or rebuilding a document, ALWAYS follow this strict sequence:
 1. Call \`clearDocument\` FIRST to wipe existing content.
 2. Call \`insertCoverPage\` with the title, subtitle, and date — this GUARANTEES the cover always appears at the top, regardless of timing.
-3. Insert sections at the END using \`insertParagraph\` in NUMERICAL ORDER: 一、first, 二、second, 三、third…
-4. Insert tables after their section heading.
+3. Write ALL sections in ONE \`writeDocument\` call with all blocks in NUMERICAL ORDER: 一、first, 二、second, 三、third… Sections with tables: write the text blocks first, then call \`insertTable\` after \`writeDocument\` finishes.
 
-NEVER use \`insertParagraph\` for the document title or cover info — use \`insertCoverPage\` instead.
+NEVER use \`insertParagraph\` or \`writeDocument\` for the document title or cover info — use \`insertCoverPage\` instead.
 NEVER insert 二 before 一. Insert sections in reading order.
+
+# Batch Writing with writeDocument (CRITICAL — saves 80% of iterations)
+\`writeDocument\` writes MANY paragraphs in a SINGLE tool call. ALWAYS prefer it over \`insertParagraph\` for document creation.
+- Pass ALL text content for ALL sections in ONE \`writeDocument\` call, as an ordered \`blocks\` array.
+- Each block = one paragraph. Use \`style\`, \`bold\`, \`fontSize\`, \`color\`, \`alignment\`, \`spaceBefore\`, \`spaceAfter\`, \`lineSpacingMultiple\` per block.
+- For body text, always set \`"lineSpacingMultiple": 1.15\` to prevent large inherited template spacing.
+- Set \`"location": "End"\` to append after the cover page.
+- Example (2 sections, 1 call):
+  \`\`\`json
+  { "location": "End", "blocks": [
+    { "text": "一、公司概况", "style": "Heading1", "spaceBefore": 12, "spaceAfter": 6 },
+    { "text": "公司成立于…主营业务为…", "style": "Normal", "lineSpacingMultiple": 1.15 },
+    { "text": "二、主要财务数据", "style": "Heading1", "spaceBefore": 12, "spaceAfter": 6 },
+    { "text": "2024年营业收入为…净利润为…", "style": "Normal", "lineSpacingMultiple": 1.15 }
+  ]}
+  \`\`\`
+- Plain text only — NO markdown (**bold**, *italic*, # headers) in text values. Use bold/italic/style params.
+- After \`writeDocument\`, call \`insertTable\` for each section that needs a table.
+- Use \`insertParagraph\` only for small targeted additions (1–2 paragraphs). Never call it in a loop.
 
 # Duplicate Content (CRITICAL)
 - NEVER insert the same heading, paragraph, or section twice. Before inserting content, mentally check: has this already been inserted in a previous step?
@@ -762,17 +781,17 @@ NEVER insert 二 before 一. Insert sections in reading order.
 
 # Efficiency — Minimise Tool Calls (CRITICAL)
 You have a limited number of iterations. Use them wisely:
-- **Combine text**: Put an entire section's body text into ONE \`insertParagraph\` call using "\\n\\n" to separate paragraphs. Do NOT call \`insertParagraph\` once per sentence or once per paragraph.
+- **Use writeDocument**: Write ALL section text in ONE \`writeDocument\` call. This is the single most important efficiency rule.
 - **Complete tables in one shot**: Pass ALL rows and ALL column values in a single \`insertTable\` call.
 - **No read-back checks**: Do not call \`getDocumentContent\` after every insertion to verify — trust that successful tool calls worked.
 - **Plan before acting**: Mentally draft the ENTIRE document structure first, then execute insertions in order with the fewest possible tool calls.
-- **Per-section target**: Aim for 2–4 tool calls per section (heading + body text). Sections with a table: add up to 3 more (insertTable + formatTable + setColumnWidths). Sections with equations: add 1 per formula. Hard cap: 8 calls per section. Always finish a section before starting the next.
+- **Target call count for a full document**: clearDocument(1) + insertCoverPage(1) + writeDocument(1) + insertTable×N + formatTable×N + setColumnWidths×N = typically 3–10 calls total regardless of section count.
 
 # Text Formatting (apply styles explicitly)
 - Section headings (一、二、三、): always pass \`style: "Heading1"\`
 - Sub-headings (1.1、1.2 etc.): use \`style: "Heading2"\`
-- Body paragraphs: use \`style: "Normal"\` (no need to specify — it is the default)
-- Do NOT insert a separate "formatting" pass after inserting text — apply the style in the same \`insertParagraph\` call.
+- Body paragraphs: use \`style: "Normal"\` and \`"lineSpacingMultiple": 1.15\` (prevents template spacing blowout)
+- Do NOT insert a separate "formatting" pass after inserting text — apply the style in the same block.
 
 # Mathematical Equations
 - Use \`insertEquation\` whenever the user needs math formulas, financial ratios, or any expression with Greek letters, fractions, superscripts, or special symbols.
@@ -788,6 +807,8 @@ const standardPrompt = (lang: string) =>
   `You are a helpful Microsoft Word specialist. Help users with drafting, brainstorming, and Word-related questions. Reply in ${lang}.`
 
 async function processChat(userMessage: HumanMessage, systemMessage?: string) {
+  errorIssue.value = null // clear any stale error from the previous request
+
   const settings = settingForm.value
   const { replyLanguage: lang, api: provider } = settings
 
@@ -803,60 +824,26 @@ async function processChat(userMessage: HumanMessage, systemMessage?: string) {
 
   // Prepare messages for LLM (always include system message first, followed by all history)
   const finalMessages = [defaultSystemMessage, ...history.value]
-  // Build provider configuration
-  const providerConfigs: Record<string, any> = {
-    deepseek: {
-      provider: 'deepseek',
-      config: {
-        apiKey: settings.deepseekAPIKey,
-      },
-      maxTokens: settings.deepseekMaxTokens,
-      temperature: settings.deepseekTemperature,
-      model: settings.deepseekModelSelect,
-    },
-    official: {
-      provider: 'official',
-      config: {
-        apiKey: settings.officialAPIKey,
-        baseURL: settings.officialBasePath,
-        dangerouslyAllowBrowser: true,
-      },
-      maxTokens: settings.officialMaxTokens,
-      temperature: settings.officialTemperature,
-      model: settings.officialModelSelect,
-    },
-    groq: {
-      provider: 'groq',
-      groqAPIKey: settings.groqAPIKey,
-      groqModel: settings.groqModelSelect,
-      maxTokens: settings.groqMaxTokens,
-      temperature: settings.groqTemperature,
-    },
-    azure: {
-      provider: 'azure',
-      azureAPIKey: settings.azureAPIKey,
-      azureAPIEndpoint: settings.azureAPIEndpoint,
-      azureDeploymentName: settings.azureDeploymentName,
-      azureAPIVersion: settings.azureAPIVersion,
-      maxTokens: settings.azureMaxTokens,
-      temperature: settings.azureTemperature,
-    },
-    gemini: {
-      provider: 'gemini',
-      geminiAPIKey: settings.geminiAPIKey,
-      maxTokens: settings.geminiMaxTokens,
-      temperature: settings.geminiTemperature,
-      geminiModel: settings.geminiModelSelect,
-    },
-    ollama: {
-      provider: 'ollama',
-      ollamaEndpoint: settings.ollamaEndpoint,
-      ollamaModel: settings.ollamaModelSelect,
-      temperature: settings.ollamaTemperature,
-    },
-  }
+  // Build only the active provider's config — avoids constructing all 6 objects per message
+  const currentConfig = (() => {
+    switch (provider) {
+      case 'deepseek':
+        return { provider: 'deepseek', config: { apiKey: settings.deepseekAPIKey }, maxTokens: settings.deepseekMaxTokens, temperature: settings.deepseekTemperature, model: settings.deepseekModelSelect }
+      case 'official':
+        return { provider: 'official', config: { apiKey: settings.officialAPIKey, baseURL: settings.officialBasePath, dangerouslyAllowBrowser: true }, maxTokens: settings.officialMaxTokens, temperature: settings.officialTemperature, model: settings.officialModelSelect }
+      case 'groq':
+        return { provider: 'groq', groqAPIKey: settings.groqAPIKey, groqModel: settings.groqModelSelect, maxTokens: settings.groqMaxTokens, temperature: settings.groqTemperature }
+      case 'azure':
+        return { provider: 'azure', azureAPIKey: settings.azureAPIKey, azureAPIEndpoint: settings.azureAPIEndpoint, azureDeploymentName: settings.azureDeploymentName, azureAPIVersion: settings.azureAPIVersion, maxTokens: settings.azureMaxTokens, temperature: settings.azureTemperature }
+      case 'gemini':
+        return { provider: 'gemini', geminiAPIKey: settings.geminiAPIKey, maxTokens: settings.geminiMaxTokens, temperature: settings.geminiTemperature, geminiModel: settings.geminiModelSelect }
+      case 'ollama':
+        return { provider: 'ollama', ollamaEndpoint: settings.ollamaEndpoint, ollamaModel: settings.ollamaModelSelect, temperature: settings.ollamaTemperature }
+      default:
+        return null
+    }
+  })()
 
-  const currentConfig = providerConfigs[provider]
   if (!currentConfig) {
     messageUtil.error(t('notSupportedProvider'))
     return
@@ -867,6 +854,7 @@ async function processChat(userMessage: HumanMessage, systemMessage?: string) {
   // Use agent mode with tools if enabled
   if (isAgentMode) {
     const tools = getActiveTools()
+    let toolCallCount = 0
 
     await getAgentResponse({
       ...currentConfig,
@@ -883,18 +871,39 @@ async function processChat(userMessage: HumanMessage, systemMessage?: string) {
         history.value[lastIndex] = new AIMessage(text)
         scrollToBottom()
       },
-      onToolCall: (_toolName: string, _args: any) => {
+      onToolCall: (toolName: string, _args: any) => {
+        toolCallCount++
         const lastIndex = history.value.length - 1
         const currentContent = getMessageText(history.value[lastIndex])
-        if (!currentContent.includes('\n\n🔧')) {
-          history.value[lastIndex] = new AIMessage(currentContent + '\n\n🔧 处理中...')
+        const baseContent = currentContent.replace(/\n\n🔧.*$/, '')
+        history.value[lastIndex] = new AIMessage(
+          baseContent + `\n\n🔧 ${toolName} (${toolCallCount})`
+        )
+        scrollToBottom()
+      },
+      onToolResult: (toolName: string, result: string) => {
+        if (result.startsWith('ERROR') || result.startsWith('Error')) {
+          const lastIndex = history.value.length - 1
+          const currentContent = getMessageText(history.value[lastIndex])
+          const baseContent = currentContent.replace(/\n\n🔧.*$/, '')
+          history.value[lastIndex] = new AIMessage(
+            baseContent + `\n\n⚠️ ${toolName}: ${result.substring(0, 120)}`
+          )
           scrollToBottom()
         }
       },
-      onToolResult: (_toolName: string, _result: string) => {
-        // individual tool results are not shown
-      },
     })
+
+    // If the agent finished with tool calls but produced no text response,
+    // the "🔧 toolName (N)" status line stays visible — replace it with a done message.
+    if (toolCallCount > 0) {
+      const lastIndex = history.value.length - 1
+      const lastText = getMessageText(history.value[lastIndex])
+      if (lastText.match(/\n\n🔧/)) {
+        const baseText = lastText.replace(/\n\n🔧.*$/, '').trim()
+        history.value[lastIndex] = new AIMessage(baseText || t('agentDone'))
+      }
+    }
   } else {
     await getChatResponse({
       ...currentConfig,
@@ -1068,34 +1077,28 @@ async function handleRestore(checkpointId: string) {
 }
 
 async function loadThreadHistory(targetThreadId: string) {
-  const checkpoints: CheckpointTuple[] = []
-  const iterator = saver.list({
+  // Use getTuple (fetches latest checkpoint directly) instead of iterating all checkpoints
+  const latest = await saver.getTuple({
     configurable: { thread_id: targetThreadId },
   })
 
-  for await (const checkpoint of iterator) {
-    checkpoints.push(checkpoint)
-  }
+  // If the user already sent a message while we were loading, don't overwrite their history
+  if (history.value.length > 0) return
 
-  if (checkpoints.length > 0) {
-    checkpoints.sort((a, b) => (a.metadata?.step ?? 0) - (b.metadata?.step ?? 0))
-
-    const latestCheckpoint = checkpoints[checkpoints.length - 1]
-    const messages = latestCheckpoint.checkpoint.channel_values.messages
-    // TODO: 优化过滤策略
+  if (latest) {
+    const messages = latest.checkpoint.channel_values.messages
     if (messages && Array.isArray(messages)) {
       history.value = messages
         .filter((msg: any) => ['human', 'ai'].includes(msg.type))
         .map((msg: any) => {
           return msg.type === 'human' ? new HumanMessage(msg.content) : new AIMessage(msg.content)
         })
-      currentCheckpointId.value = latestCheckpoint.config.configurable?.checkpoint_id || ''
+      currentCheckpointId.value = latest.config.configurable?.checkpoint_id || ''
     } else {
       history.value = []
       currentCheckpointId.value = ''
     }
   } else {
-    // No checkpoints found for this thread
     history.value = []
     currentCheckpointId.value = ''
   }
@@ -1114,14 +1117,9 @@ onBeforeMount(() => {
   loadSavedPrompts()
 
   if (threadId.value) {
-    loading.value = true // 可选：显示加载状态
-    try {
-      loadThreadHistory(threadId.value)
-    } catch (e) {
+    loadThreadHistory(threadId.value).catch(e => {
       console.error('Auto reload history failed:', e)
-    } finally {
-      loading.value = false
-    }
+    })
   }
 })
 </script>

@@ -4,6 +4,7 @@
   "activePrompt": "Active Prompt",
   "add": "Add",
   "addPrompt": "Add Prompt",
+  "agentDone": "Done",
   "agentMaxIterationsLabel": "Agent Max Iterations",
   "agentModeNotSupported": "Agent mode not supported by current API",
   "agentModeNotSupportedMsg": "The current API provider does not support Agent mode (function calling). Please switch to OpenAI, Gemini, or Groq to use Agent features.",
@@ -144,6 +145,9 @@
   "summary": "Summary",
   "systemPrompt": "System Prompt",
   "systemPromptPlaceholder": "Please input system prompt",
+  "searchApiLabel": "Search API",
+  "serperAPIKeyLabel": "Serper API Key",
+  "serperAPIKeyPlaceholder": "Enter Serper.dev API key for reliable web search",
   "tools": "Tools",
   "translate": "Translate",
   "userPrompt": "User Prompt",
@@ -253,6 +257,8 @@
   "wordTool_insertCoverPage_desc": "Insert a formatted cover page at the very top of the document.",
   "wordTool_insertEquation": "Insert Equation",
   "wordTool_insertEquation_desc": "Insert a mathematical equation using LaTeX notation (fractions, Greek letters, sub/superscripts).",
+  "wordTool_writeDocument": "Write Document",
+  "wordTool_writeDocument_desc": "Write multiple paragraphs in one operation with full formatting control (faster than insertParagraph).",
   "wordTools": "Word Tools",
   "wordToolsDescription": "Built-in tools that AI agents can use to interact with your Word document."
 }

@@ -4,6 +4,7 @@
   "activePrompt": "当前默认提示词",
   "add": "添加",
   "addPrompt": "添加提示词",
+  "agentDone": "操作完成",
   "agentMaxIterationsLabel": "Agent 最大迭代次数",
   "agentModeNotSupported": "当前 API 不支持 Agent 模式",
   "agentModeNotSupportedMsg": "当前 API 提供商不支持 Agent 模式（函数调用），请切换到 OpenAI、Gemini 或 Groq 以使用 Agent 功能。",
@@ -144,6 +145,9 @@
   "summary": "摘要",
   "systemPrompt": "角色设定提示词",
   "systemPromptPlaceholder": "请输入角色设定提示词",
+  "searchApiLabel": "搜索 API",
+  "serperAPIKeyLabel": "Serper API 密钥",
+  "serperAPIKeyPlaceholder": "输入 Serper.dev API 密钥以启用可靠的网页搜索",
   "tools": "工具",
   "translate": "翻译",
   "userPrompt": "用户提示词",
@@ -253,6 +257,8 @@
   "wordTool_insertCoverPage_desc": "在文档最顶部插入格式化封面（标题、副标题、日期等）。",
   "wordTool_insertEquation": "插入公式",
   "wordTool_insertEquation_desc": "使用 LaTeX 语法插入数学公式（分数、希腊字母、上下标等）。",
+  "wordTool_writeDocument": "批量写入文档",
+  "wordTool_writeDocument_desc": "一次性写入多个段落，支持完整排版控制，比逐段插入快10-20倍。",
   "wordTools": "Word 工具",
   "wordToolsDescription": "Agent模式下AI可以使用这些内置工具与您的 Word 文档进行交互。"
 }

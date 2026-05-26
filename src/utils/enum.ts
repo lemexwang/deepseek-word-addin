@@ -56,4 +56,6 @@ export const localStorageKey = {
   proxy: 'proxy',
   defaultSystemPrompt: 'defaultSystemPrompt',
   defaultPrompt: 'defaultPrompt',
+  // search
+  serperAPIKey: 'serperAPIKey',
 } as const

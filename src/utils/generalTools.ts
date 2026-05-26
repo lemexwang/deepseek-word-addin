@@ -18,33 +18,39 @@ const fetchWebContentTool = new DynamicStructuredTool({
     url: z.string().describe('The URL to fetch content from'),
   }),
   func: async ({ url }) => {
-    try {
-      const response = await fetch(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        },
-      })
-
-      if (!response.ok) {
-        return `Failed to fetch content: ${response.status} ${response.statusText}`
+    const tryFetch = async (fetchUrl: string, timeout: number): Promise<string | null> => {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), timeout)
+      try {
+        const response = await fetch(fetchUrl, {
+          signal: controller.signal,
+          headers: { Accept: 'text/html,text/plain,*/*' },
+        })
+        if (!response.ok) return null
+        return await response.text()
+      } catch {
+        return null
+      } finally {
+        clearTimeout(timer)
       }
-
-      const html = await response.text()
-
-      const textContent = html
-        .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-        .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-
-      const maxLength = 5000
-      const content = textContent.length > maxLength ? textContent.substring(0, maxLength) + '...' : textContent
-
-      return `Content from ${url}:\n\n${content}`
-    } catch (error: any) {
-      return `Error fetching content: ${error.message}`
     }
+
+    const truncate = (text: string, max = 5000) =>
+      text.length > max ? text.substring(0, max) + '...' : text
+
+    // 1. Local dev-server proxy — Node.js, no CORS, tries Jina then direct fetch
+    const proxyText = await tryFetch(`/api/fetch?url=${encodeURIComponent(url)}`, 15000)
+    if (proxyText && proxyText.length > 50) {
+      return `Content from ${url}:\n\n${truncate(proxyText)}`
+    }
+
+    // 2. Jina.ai reader direct (fallback if not in dev mode)
+    const jinaText = await tryFetch(`https://r.jina.ai/${url}`, 12000)
+    if (jinaText && jinaText.length > 100) {
+      return `Content from ${url}:\n\n${truncate(jinaText)}`
+    }
+
+    return `Error fetching content from ${url}: unable to retrieve content (CORS restrictions or network unavailable)`
   },
 })
 
@@ -60,36 +66,58 @@ const searchWebTool = new DynamicStructuredTool({
   }),
   func: async ({ query, maxResults = 5 }) => {
     const clampedMax = Math.min(Math.max(1, maxResults), 10)
-    const controller = new AbortController()
-    // 8-second timeout — fail fast so the agent can move on rather than hanging
-    const timer = setTimeout(() => controller.abort(), 8000)
+    const SNIPPET_MAX = 400
+    const serperKey = localStorage.getItem('serperAPIKey') || ''
+
+    // 1. Local dev-server proxy — Node.js side, no CORS restrictions, tries Serper→ddgs→DDG-IA
     try {
-      const url = `https://ddgs.horosama.com/search/text?query=${encodeURIComponent(query)}&max_results=${clampedMax}`
-      const response = await fetch(url, { signal: controller.signal })
-      if (!response.ok) {
-        return `Search failed: ${response.status} ${response.statusText}`
-      }
-      const data = await response.json()
-      if (!data.results || data.results.length === 0) {
-        return 'No search results found.'
-      }
-      // Truncate each snippet to 300 chars — keeps token count low so the AI step is faster
-      const SNIPPET_MAX = 300
-      return data.results
-        .slice(0, clampedMax)
-        .map((result: any, index: number) => {
-          const snippet = (result.body || '').slice(0, SNIPPET_MAX)
-          return `[${index + 1}] ${result.title}\n${result.href}\n${snippet}`
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 20000)
+      try {
+        const response = await fetch(`/api/search?q=${encodeURIComponent(query)}&max=${clampedMax}`, {
+          signal: controller.signal,
+          headers: serperKey ? { 'X-Serper-Key': serperKey } : {},
         })
-        .join('\n\n')
-    } catch (error: any) {
-      if (error.name === 'AbortError') {
-        return 'Search timed out after 8 seconds. The search service may be unavailable. Try again or use your existing knowledge.'
+        if (response.ok) {
+          const data = await response.json()
+          if (data.results?.length > 0) {
+            return data.results
+              .map((r: any) => `[${r.index}] ${r.title}\n${r.url}\n${r.snippet}`)
+              .join('\n\n')
+          }
+        }
+      } finally {
+        clearTimeout(timer)
       }
-      return `Error searching: ${error.message}`
-    } finally {
-      clearTimeout(timer)
+    } catch { /* fall through */ }
+
+    // 2. Direct Serper.dev — has proper CORS headers, works from browser
+    if (serperKey) {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 8000)
+      try {
+        const response = await fetch('https://google.serper.dev/search', {
+          method: 'POST',
+          signal: controller.signal,
+          headers: { 'X-API-KEY': serperKey, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ q: query, num: clampedMax }),
+        })
+        if (response.ok) {
+          const data = await response.json()
+          const items: any[] = data.organic || []
+          if (items.length > 0) {
+            return items
+              .slice(0, clampedMax)
+              .map((r: any, i: number) => `[${i + 1}] ${r.title}\n${r.link}\n${(r.snippet || '').slice(0, SNIPPET_MAX)}`)
+              .join('\n\n')
+          }
+        }
+      } catch { /* fall through */ } finally {
+        clearTimeout(timer)
+      }
     }
+
+    return 'Search timed out. The search service may be unavailable. Try again or use your existing knowledge.'
   },
 })
 
@@ -146,11 +174,6 @@ const calculateMathTool = new DynamicStructuredTool({
   func: async ({ expression }) => {
     try {
       const result = evaluate(expression)
-
-      if (typeof result !== 'number' && typeof result !== 'bigint') {
-        return `Calculation completed, but result is not a simple number: ${result}`
-      }
-
       return `${expression} = ${result}`
     } catch (error: any) {
       return `Error evaluating expression: ${error.message}`

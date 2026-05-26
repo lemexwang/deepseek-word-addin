@@ -22,4 +22,5 @@ interface WordToolDefinition {
   description: string
   inputSchema: ToolInputSchema
   execute: (args: Record<string, any>) => Promise<string>
+  readonly?: boolean // true = skip withWordLock (safe for read-only Word.run operations)
 }

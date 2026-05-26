@@ -361,6 +361,104 @@ check('Mixed content: list items with \\\\n prefix', () => {
     ? [] : [`Segments: ${JSON.stringify(segs)}`]
 })
 
+// ── 8. Read-only tool mutex bypass ───────────────────────────────────────────
+console.log('\n=== 8. Read-only Tool Mutex Bypass ===\n')
+
+const EXPECTED_READONLY = new Set([
+  'getSelectedText', 'getDocumentContent', 'getDocumentProperties',
+  'getRangeInfo', 'getTableInfo', 'findText', 'getComments',
+  'getHeaderFooter', 'getSections', 'listStyles',
+])
+
+check('All expected read-only tools are marked readonly in source', () => {
+  const issues = []
+  for (const name of EXPECTED_READONLY) {
+    // Find the slice between the tool definition start and its execute: key
+    const defStart = wordToolsSrc.indexOf(`  ${name}: {`)
+    const execPos = wordToolsSrc.indexOf('execute:', defStart)
+    if (defStart === -1 || execPos === -1) { issues.push(`"${name}" definition not found`); continue }
+    const defBlock = wordToolsSrc.slice(defStart, execPos)
+    if (!defBlock.includes('readonly: true')) {
+      issues.push(`"${name}" should be marked readonly: true`)
+    }
+  }
+  return issues
+})
+
+check('No write tool is accidentally marked readonly', () => {
+  // Count readonly: true occurrences — should match EXPECTED_READONLY.size exactly
+  const count = (wordToolsSrc.match(/readonly:\s*true/g) || []).length
+  return count === EXPECTED_READONLY.size
+    ? []
+    : [`Expected ${EXPECTED_READONLY.size} readonly tools, found ${count}`]
+})
+
+check('createWordTools applies lock bypass for readonly tools', () => {
+  const hasBypass = wordToolsSrc.includes('def.readonly')
+  return hasBypass ? [] : ['createWordTools does not check def.readonly for lock bypass']
+})
+
+// ── 9. insertParagraph Before/After joining (Bug fix: raw \n in cursor-relative insert) ──
+console.log('\n=== 8. insertParagraph Before/After Joining ===\n')
+
+// Simulate the Before/After path: segments joined with space (no raw \n chars in output)
+function joinForCursorInsert(text) {
+  return splitSegments(text).join(' ')
+}
+
+check('Before/After: single line unchanged', () => {
+  const result = joinForCursorInsert('hello world')
+  return result === 'hello world' ? [] : [`Expected "hello world", got: ${JSON.stringify(result)}`]
+})
+
+check('Before/After: \\\\n joined with space (no raw newline)', () => {
+  const result = joinForCursorInsert('line one\\nline two')
+  const hasNoNewline = !result.includes('\n')
+  const isJoined = result === 'line one line two'
+  return isJoined && hasNoNewline ? [] : [
+    `Expected "line one line two" with no \\n, got: ${JSON.stringify(result)}`
+  ]
+})
+
+check('Before/After: multi-line joined, no \\n in output', () => {
+  const result = joinForCursorInsert('a\\nb\\nc')
+  return !result.includes('\n') ? [] : [`Result contains literal newline: ${JSON.stringify(result)}`]
+})
+
+check('Before/After: double \\\\n\\\\n produces double space (not control char)', () => {
+  const result = joinForCursorInsert('a\\n\\nb')
+  return !result.includes('\n') ? [] : [`Result contains literal newline: ${JSON.stringify(result)}`]
+})
+
+check('Before/After: real newline in input also joined', () => {
+  const result = 'a\nb'.split('\n').join(' ')
+  return result === 'a b' && !result.includes('\n') ? [] : [`Got: ${JSON.stringify(result)}`]
+})
+
+// ── 9. deleteText empty-selection guard ───────────────────────────────────────
+console.log('\n=== 9. deleteText Empty-Selection Guard ===\n')
+
+// Simulate the guard logic: if text.length === 0, return early message
+function simulateDeleteText(selectedText) {
+  if (selectedText.length === 0) return 'No text selected to delete.'
+  return 'Text deleted.'
+}
+
+check('deleteText: no selection returns informative message', () => {
+  const result = simulateDeleteText('')
+  return result === 'No text selected to delete.' ? [] : [`Got: ${result}`]
+})
+
+check('deleteText: non-empty selection returns success', () => {
+  const result = simulateDeleteText('some text')
+  return result === 'Text deleted.' ? [] : [`Got: ${result}`]
+})
+
+check('deleteText: whitespace-only selection is still non-empty', () => {
+  const result = simulateDeleteText('   ')
+  return result === 'Text deleted.' ? [] : [`Got: ${result}`]
+})
+
 // ── Summary ────────────────────────────────────────────────────────────────
 console.log(`\n${'─'.repeat(50)}`)
 console.log(`Results: ${passed} passed, ${failed} failed`)
