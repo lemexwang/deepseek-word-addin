@@ -1623,8 +1623,7 @@ const wordToolDefinitions: Record<WordToolName, WordToolDefinition> = {
     },
     execute: async args => {
       const { title = '目 录', location = 'End', chapters } = args
-      return withWordLock(() =>
-        Word.run(async context => {
+      return Word.run(async context => {
           type HeadingEntry = { level: number; text: string }
           let headings: HeadingEntry[] = []
 
@@ -1686,8 +1685,7 @@ const wordToolDefinitions: Record<WordToolName, WordToolDefinition> = {
             return `TOC title "${title}" inserted. No chapter entries yet — call insertTableOfContents again with a "chapters" array, or write chapters with Heading1/Heading2 styles then call updateTableOfContents.`
           }
           return `TOC inserted with ${headings.length} entries.`
-        }),
-      )
+        })
     },
   },
 
@@ -2069,45 +2067,43 @@ const wordToolDefinitions: Record<WordToolName, WordToolDefinition> = {
     },
     execute: async args => {
       const { blocks, location = 'End' } = args
-      return withWordLock(() =>
-        Word.run(async context => {
-          if (location === 'Replace') {
-            context.document.body.clear()
+      return Word.run(async context => {
+        if (location === 'Replace') {
+          context.document.body.clear()
+        }
+
+        const insertLoc: 'Start' | 'End' = location === 'Start' ? 'Start' : 'End'
+        const orderedBlocks: any[] = location === 'Start' ? [...blocks].reverse() : blocks
+
+        const applyBlock = (para: Word.Paragraph, block: any) => {
+          if (block.style) { try { para.styleBuiltIn = block.style as any } catch { para.style = block.style } }
+          if (block.alignment) para.alignment = (block.alignment === 'center' ? 'centered' : block.alignment) as any
+          if (block.fontSize !== undefined) para.font.size = block.fontSize
+          if (block.bold !== undefined) para.font.bold = block.bold
+          if (block.italic !== undefined) para.font.italic = block.italic
+          if (block.fontFamily) para.font.name = block.fontFamily
+          if (block.color) para.font.color = String(block.color).replace(/^#/, '')
+          if (block.spaceBefore !== undefined) para.spaceBefore = block.spaceBefore
+          if (block.spaceAfter !== undefined) para.spaceAfter = block.spaceAfter
+          if (block.lineSpacingMultiple !== undefined) {
+            para.lineSpacingRule = Word.LineSpacingRule.multiple as any
+            para.lineSpacing = block.lineSpacingMultiple * 12
           }
+        }
 
-          const insertLoc: 'Start' | 'End' = location === 'Start' ? 'Start' : 'End'
-          const orderedBlocks: any[] = location === 'Start' ? [...blocks].reverse() : blocks
-
-          const applyBlock = (para: Word.Paragraph, block: any) => {
-            if (block.style) { try { para.styleBuiltIn = block.style as any } catch { para.style = block.style } }
-            if (block.alignment) para.alignment = (block.alignment === 'center' ? 'centered' : block.alignment) as any
-            if (block.fontSize !== undefined) para.font.size = block.fontSize
-            if (block.bold !== undefined) para.font.bold = block.bold
-            if (block.italic !== undefined) para.font.italic = block.italic
-            if (block.fontFamily) para.font.name = block.fontFamily
-            if (block.color) para.font.color = String(block.color).replace(/^#/, '')
-            if (block.spaceBefore !== undefined) para.spaceBefore = block.spaceBefore
-            if (block.spaceAfter !== undefined) para.spaceAfter = block.spaceAfter
-            if (block.lineSpacingMultiple !== undefined) {
-              para.lineSpacingRule = Word.LineSpacingRule.multiple as any
-              para.lineSpacing = block.lineSpacingMultiple * 12
-            }
+        for (const block of orderedBlocks) {
+          const normalised = (block.text || '').replace(/\\n/g, '\n')
+          const segments = normalised.split('\n')
+          const orderedSegs = location === 'Start' ? [...segments].reverse() : segments
+          for (const seg of orderedSegs) {
+            const para = context.document.body.insertParagraph(seg, insertLoc)
+            applyBlock(para, block)
           }
+        }
 
-          for (const block of orderedBlocks) {
-            const normalised = (block.text || '').replace(/\\n/g, '\n')
-            const segments = normalised.split('\n')
-            const orderedSegs = location === 'Start' ? [...segments].reverse() : segments
-            for (const seg of orderedSegs) {
-              const para = context.document.body.insertParagraph(seg, insertLoc)
-              applyBlock(para, block)
-            }
-          }
-
-          await context.sync()
-          return `${blocks.length} block(s) written to document (location: ${location}).`
-        }),
-      )
+        await context.sync()
+        return `${blocks.length} block(s) written to document (location: ${location}).`
+      })
     },
   },
 
